@@ -1,0 +1,65 @@
+FROM php:8.2-apache
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    unzip \
+    libpq-dev \
+    libzip-dev \
+    nodejs \
+    npm \
+    && docker-php-ext-install pdo pdo_mysql zip \
+    && a2enmod rewrite \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+
+# Copy project files
+# Copiar todo el contenido del contexto de build al contenedor
+COPY . /app/
+
+# Install PHP dependencies
+RUN composer install --no-interaction --optimize-autoloader
+
+# Install Node dependencies and build assets
+RUN npm install && npm run build
+
+# Set permissions for Laravel
+RUN chown -R www-data:www-data /app \
+    && chmod -R 755 /app \
+    && chmod -R 775 /app/storage /app/bootstrap/cache
+
+# Configure Apache for Laravel
+RUN echo '<VirtualHost *:8080>' > /etc/apache2/sites-available/laravel.conf \
+    && echo '    ServerName localhost' >> /etc/apache2/sites-available/laravel.conf \
+    && echo '    DocumentRoot /app/public' >> /etc/apache2/sites-available/laravel.conf \
+    && echo '    <Directory /app/public>' >> /etc/apache2/sites-available/laravel.conf \
+    && echo '        AllowOverride All' >> /etc/apache2/sites-available/laravel.conf \
+    && echo '        Require all granted' >> /etc/apache2/sites-available/laravel.conf \
+    && echo '        RewriteEngine On' >> /etc/apache2/sites-available/laravel.conf \
+    && echo '        RewriteCond %{REQUEST_FILENAME} !-d' >> /etc/apache2/sites-available/laravel.conf \
+    && echo '        RewriteCond %{REQUEST_FILENAME} !-f' >> /etc/apache2/sites-available/laravel.conf \
+    && echo '        RewriteRule ^ index.php [QSA,L]' >> /etc/apache2/sites-available/laravel.conf \
+    && echo '    </Directory>' >> /etc/apache2/sites-available/laravel.conf \
+    && echo '</VirtualHost>' >> /etc/apache2/sites-available/laravel.conf
+
+# Disable default site and enable Laravel site
+RUN a2dissite 000-default.conf && a2ensite laravel.conf
+
+# Change Apache to listen on port 8080
+RUN sed -i 's/Listen 80/Listen 8080/' /etc/apache2/ports.conf
+
+# Set environment
+ENV APP_ENV=local
+ENV APP_DEBUG=true
+
+# Expose port
+EXPOSE 8080
+
+# Start Apache
+CMD ["apache2-foreground"]
